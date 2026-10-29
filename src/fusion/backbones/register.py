@@ -2,23 +2,38 @@ import torch as th
 import torch.nn as nn
 from inspect import signature
 from warnings import warn
-from typing import Any, Callable, Dict
+from typing import Any, Callable, Dict, Optional, List
 from dataclasses import (dataclass, fields)
-from .register import get_backbone
+from .layers import get_activation
 
 __BACKBONES__ = {}
 @dataclass
 class BackboneMeta:
     name: str
-    cls: nn.Module
+    cls: Any
     config_cls: Any
-    training_step_fn: Callable[...]
+    training_step_fn: Callable[..., dict]
+    versions_src: Optional[List[str]]=None
+    """backbone  meta information storage.
+    Attributes:
+        name: str - backbone name
+        cls: model class. 
+        config_cls: model config class.
+        training_step_fn: training step forward function with arguments:
+                                1) batch: Dict["raw_signals", "text", "cls_labels"]
+                                2) model: nn.Module | PretrainedModel to pass data through
+                                3) tokenizer: Optional[PretrainedTokenizer] in case if model was trained to solve tasks with txt data.
+    versions_src: model versions source paths from Hf. """
 
 def register_backbone(
     config_cls: Any, 
-    training_step_fn: Callable[...],
+    training_step_fn: Callable[..., dict],
     owerride: bool=False
 ):
+    """backbone registraction decorator. 
+    Arguments:
+        owerride: where owerride already registered backbone or raise en error. 
+        Else arguments provided accoring BackboneMeta structure. """
     def decodator(cls):
         assert hasattr(cls, "_embedding_dim"), ("backbone must have final _embedding_dim attribute")
         assert hasattr(cls, "load"), ("backbone must have own load(str) classmethod . ")
@@ -39,43 +54,6 @@ def get_backbone(name: str):
     return meta
 
 
-def get_activation(name: str, **kwargs: Any) -> nn.Module:
-    registry: dict[str, Callable[..., nn.Module]] = {
-        "relu": nn.ReLU,
-        "relu6": nn.ReLU6,
-        "leaky_relu": nn.LeakyReLU,
-        "elu": nn.ELU,
-        "selu": nn.SELU,
-        "celu": nn.CELU,
-        "gelu": nn.GELU,
-        "silu": nn.SiLU,
-        "swish": nn.SiLU,
-        "mish": nn.Mish,
-        "sigmoid": nn.Sigmoid,
-        "tanh": nn.Tanh,
-        "softplus": nn.Softplus,
-        "softsign": nn.Softsign,
-        "hardswish": nn.Hardswish,
-        "hardsigmoid": nn.Hardsigmoid,
-        "leaky_relu_p": lambda negative_slope=0.01, **kw: nn.LeakyReLU(negative_slope, **kw),
-        "elu_alpha": lambda alpha=1.0, **kw: nn.ELU(alpha, **kw),
-    }
-
-    key = name.lower().strip()
-    if key not in registry:
-        available = ", ".join(sorted(registry))
-        raise ValueError(
-            f"Unknown activation '{name}'. Available: {available}"
-        )
-    factory = registry[key]
-    try:
-        return factory(**kwargs)
-    except TypeError as e:
-        raise TypeError(
-            f"Invalid arguments for activation '{name}': {kwargs}. "
-            f"Original error: {e}"
-        ) from e
-
 class FilmFiltration(nn.Module):
     def __init__(self, features: int):
         self._alpha_gate = nn.Sequential(nn.Linear(features, 2), get_activation("sigmoid"))
@@ -95,6 +73,7 @@ class fusionHeadConfig:
     activation: str="relu"
     filtration: bool=False
     normalization: bool=False
+
 
 class BackboneWrapper(nn.Module):
     def __init__(self, 
@@ -135,7 +114,7 @@ class BackboneWrapper(nn.Module):
 
     def _check_backbon(self, backbone):
         """Check backbone. """
-        for attrib in ["_name", "_embedding_dim", "load"]:
+        for attrib in ["_name", "_embedding_dim", "_params_src", "load"]:
             if not hasattr(self._backbone, attrib):
                 raise ValueError(f"missing {attrib} attribute in {type(backbone)}")
         if backbone._name not in __BACKBONES__:
@@ -189,7 +168,7 @@ class MetaFeaturesMixer(nn.Module):
             self._backbones = nn.ModuleDict(_backbones)
         else:
             raise ValueError("empty self._backbones. ")
-
+        
     def forward(self, inputs: th.Tensor, return_dict: bool=False, **kwargs):
         tokens = {} if return_dict else []
         for name, m in self._backbones.items():

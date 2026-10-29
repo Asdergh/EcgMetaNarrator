@@ -3,4 +3,9 @@ test_*.txt
 __pycache__
 *.pyc
 venv/
+<<<<<<< Updated upstream
 .venv/
+=======
+.pdf
+.csv
+>>>>>>> Stashed changes

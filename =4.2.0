@@ -1,0 +1,27 @@
+Collecting nbformat
+  Using cached nbformat-5.11.1-py3-none-any.whl.metadata (3.7 kB)
+Collecting fastjsonschema>=2.15 (from nbformat)
+  Using cached fastjsonschema-2.22.2-py3-none-any.whl.metadata (2.1 kB)
+Collecting jsonschema>=2.6 (from nbformat)
+  Using cached jsonschema-4.26.0-py3-none-any.whl.metadata (7.6 kB)
+Requirement already satisfied: jupyter-core!=5.0.*,>=4.12 in ./venv/lib/python3.13/site-packages (from nbformat) (5.9.1)
+Requirement already satisfied: traitlets>=5.1 in ./venv/lib/python3.13/site-packages (from nbformat) (5.16.1)
+Collecting attrs>=22.2.0 (from jsonschema>=2.6->nbformat)
+  Using cached attrs-26.1.0-py3-none-any.whl.metadata (8.8 kB)
+Collecting jsonschema-specifications>=2023.03.6 (from jsonschema>=2.6->nbformat)
+  Using cached jsonschema_specifications-2025.9.1-py3-none-any.whl.metadata (2.9 kB)
+Collecting referencing>=0.28.4 (from jsonschema>=2.6->nbformat)
+  Using cached referencing-0.37.0-py3-none-any.whl.metadata (2.8 kB)
+Collecting rpds-py>=0.25.0 (from jsonschema>=2.6->nbformat)
+  Downloading rpds_py-2026.9.1-cp313-cp313-manylinux_2_17_x86_64.manylinux2014_x86_64.whl.metadata (4.1 kB)
+Requirement already satisfied: platformdirs>=2.5 in ./venv/lib/python3.13/site-packages (from jupyter-core!=5.0.*,>=4.12->nbformat) (4.13.5)
+Using cached nbformat-5.11.1-py3-none-any.whl (79 kB)
+Using cached fastjsonschema-2.22.2-py3-none-any.whl (27 kB)
+Using cached jsonschema-4.26.0-py3-none-any.whl (90 kB)
+Using cached attrs-26.1.0-py3-none-any.whl (67 kB)
+Using cached jsonschema_specifications-2025.9.1-py3-none-any.whl (18 kB)
+Using cached referencing-0.37.0-py3-none-any.whl (26 kB)
+Downloading rpds_py-2026.9.1-cp313-cp313-manylinux_2_17_x86_64.manylinux2014_x86_64.whl (370 kB)
+Installing collected packages: rpds-py, fastjsonschema, attrs, referencing, jsonschema-specifications, jsonschema, nbformat
+
+Successfully installed attrs-26.1.0 fastjsonschema-2.22.2 jsonschema-4.26.0 jsonschema-specifications-2025.9.1 nbformat-5.11.1 referencing-0.37.0 rpds-py-2026.9.1
