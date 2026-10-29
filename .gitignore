@@ -1,5 +1,6 @@
-test_*
+test_*.txt
 *.txt
 __pycache__
 *.pyc
 venv/
+.venv/

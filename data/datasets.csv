@@ -1,0 +1,6 @@
+acronym,signal_format,target_source,archive_records,loader_records,leads,sampling_rate,mapping,inclusion_criteria
+PTB-XL,.dat/.hea,scp_codes in ptbxl_database.csv,21837,not measured,12,100 or 500 Hz,diagnostic superclass to NORM/MI/STTC/CD/HYP,record has a WFDB pair and at least one supported SCP code
+PTB-DB,.dat/.hea,#Dx or #Diagnosis in .hea comments,549,not measured,15,1000 Hz,explicit normal/abnormal source token mapping,record has a WFDB pair and a recognized diagnosis token
+CHALLENGE2020,.mat/.hea,#Dx SNOMED CT codes in .hea comments,43101,not measured,variable,variable,SNOMED CT source codes to a fixed acronym,record has a .mat/.hea pair and at least one supported Dx code
+CHALLENGE2018,.mat/.dat/.hea/.apn,WFDB .apn sidecar annotation,994,not measured,1,100 Hz,annotation symbols A/N to apnea/no apnea,record has a signal/header pair and a readable .apn annotation
+LUDB,.dat/.hea,#Dx or #Diagnosis in .hea comments,200,not measured,12,500 Hz,explicit normal/abnormal source token mapping,record has a WFDB pair and a recognized diagnosis token
