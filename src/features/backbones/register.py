@@ -7,41 +7,24 @@ from dataclasses import (dataclass, fields)
 from .layers import get_activation
 
 __BACKBONES__ = {}
-@dataclass
-class BackboneMeta:
-    name: str
-    cls: Any
-    config_cls: Any
-    training_step_fn: Callable[..., dict]
-    versions_src: Optional[List[str]]=None
-    """backbone  meta information storage.
-    Attributes:
-        name: str - backbone name
-        cls: model class. 
-        config_cls: model config class.
-        training_step_fn: training step forward function with arguments:
-                                1) batch: Dict["raw_signals", "text", "cls_labels"]
-                                2) model: nn.Module | PretrainedModel to pass data through
-                                3) tokenizer: Optional[PretrainedTokenizer] in case if model was trained to solve tasks with txt data.
-    versions_src: model versions source paths from Hf. """
-
-def register_backbone(
-    config_cls: Any, 
-    training_step_fn: Callable[..., dict],
-    owerride: bool=False
-):
+def _check_backbon(backbone: str):
+    for attr in ["_name",
+                "_embedding_dim",
+                "_repo_id",
+                "_acronim"]:
+        if not hasattr(backbone, attr):
+            raise ValueError(f"wrong backbone object. Cound't fidn: {attr} attribute.")
+        
+def register_backbone(owerride: bool=False):
     """backbone registraction decorator. 
     Arguments:
         owerride: where owerride already registered backbone or raise en error. 
         Else arguments provided accoring BackboneMeta structure. """
     def decodator(cls):
-        assert hasattr(cls, "_embedding_dim"), ("backbone must have final _embedding_dim attribute")
-        assert hasattr(cls, "load"), ("backbone must have own load(str) classmethod . ")
+        _check_backbon(cls)
         name = cls._name
         if (name not in __BACKBONES__) or owerride:
-            __BACKBONES__[name] = BackboneMeta(cls=cls, 
-                                            config_cls=config_cls,
-                                            training_step_fn=training_step_fn)
+            __BACKBONES__[name] = cls
         else:
             RuntimeError(f"{name} backbone is already in __BACKBONES__")
         return cls
@@ -74,29 +57,23 @@ class fusionHeadConfig:
     filtration: bool=False
     normalization: bool=False
 
-
 class BackboneWrapper(nn.Module):
-    def __init__(self, 
-                backbone: nn.Module,
-                fusion_config: fusionHeadConfig):
+    def __init__(self, fusion_config: fusionHeadConfig):
         """Fusion backbone wrapper to project different models 
         latent features into one core_embedding_dim. 
         Arguments:
-            backbone: nn.Module - backbone encoder model that will process one specific input domain. 
-            core_embedding_dim: int - features dimentionality to project backbone latents.
-            dp: float - dropout rate for input latent. Adds some noise to signal from backbone
-                        to make _head more robust to specified input type. 
-            activations: str - activation function for _head. 
-            filtration: bool - wheere or not to apply film gated filtration layer. 
-            normalization: bool - where or not to apply layer normalization after projection in _head. 
+            fusion_config: fusionHeadConfig class with fields:
+                core_embedding_dim: int - features dimentionality to project backbone latents.
+                dp: float - dropout rate for input latent. Adds some noise to signal from backbone
+                            to make _head more robust to specified input type. 
+                activations: str - activation function for _head. 
+                filtration: bool - wheere or not to apply film gated filtration layer. 
+                normalization: bool - where or not to apply layer normalization after projection in _head. 
         Note:
             Every backbone pre-wrapper that is registered to be incapsulated
             by BackboneWrapper must have _embedding_dim of its outputs specified 
             by pre-wrapper instance i.e backbone itself. """
         super(BackboneWrapper, self).__init__()
-        self._backbone = backbone
-        
-            
         self._backbone.eval()
         for p in self._backbone.parameters():
             p.requires_grad_(False)
