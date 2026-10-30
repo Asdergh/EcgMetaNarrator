@@ -1,0 +1,76 @@
+# run_config.yaml — фактическая конфигурация локального прогона (RTX 4060 / WSL2)
+# Зафиксировано по результатам запуска vLLM 0.32.0.
+
+schema_version: 1
+run_id: "{model_slug}__{gpu_slug}__vllm-{vllm_version}__c{concurrency}__{prompt_bucket}"
+
+hardware:
+  gpu_type: "NVIDIA GeForce RTX 4060"
+  gpu_count: 1
+  vram_gb: 8
+  driver_version: "610.62"
+  cuda_version: "13.3"          # CUDA UMD Version из nvidia-smi
+  tensor_parallel_size: 1
+  note: "WSL2; Xwayland занимает ~3.7 GiB, поэтому gpu_memory_utilization снижен до 0.75"
+
+model:
+  hf_id: "Qwen/Qwen2.5-3B-Instruct-AWQ"
+  family: "Qwen2.5"
+  params: "3B"
+  quantization: "AWQ-INT4"
+  quantization_version: "official HF repo"
+  dtype: "float16"
+  weights_vram_gib: 1.95          # факт из лога: Model loading took 1.95 GiB
+
+model_baseline:
+  hf_id: "Qwen/Qwen2.5-1.5B-Instruct-AWQ"
+  family: "Qwen2.5"
+  params: "1.5B"
+  quantization: "AWQ-INT4"
+  dtype: "float16"
+
+vllm:
+  version: "0.32.0"              # фактическая
+  launch_method: "wsl2_local"
+  served_model_name: "qwen25-3b-awq"
+  port: 8001                     # 8000 занят docker-proxy (moscow-vibe-backend)
+  env:
+    VLLM_USE_FLASHINFER_SAMPLER: "0"   # без этого падает: нет nvcc для JIT
+  args:
+    max_num_seqs: 8
+    max_model_len: 2048
+    gpu_memory_utilization: 0.75
+    enable_per_request_metrics: true   # флаг принят, но метрики в streaming не отдаются
+  observed:
+    kv_cache_tokens: 96048
+    max_concurrency_by_kv: 46.9
+    startup_seconds_warm: 27.34
+
+prompts:
+  corpus_path: "prompts/prompts.jsonl"
+  corpus_sha256: "f381cd729bdef9542c8ac9807f28f6fa664c307038f846e2602a5ce487d7232d"
+  corpus_count: 120
+  corpus_seed: 42
+  buckets: ["short", "long"]
+  short_tokens_range: [256, 512]
+  long_tokens_range: [1536, 2048]
+  active_buckets_for_local: ["short"]   # long не влезает: 2046+128 > 2048
+
+load_test:
+  concurrency_grid: [1, 4, 8]    # 8 = max_num_seqs; KV-кэш позволил бы 46, но планировщик ограничен 8
+  repeats_per_session: 10
+  max_tokens: 128
+  stream: true
+  ttft_client_is_primary: true
+  server_metrics_available: false   # факт: v0.32.0 V1 не отдаёт per-request TTFT в streaming
+  warmup_requests: 1
+  ttft_budget_p95_ms: 2000
+
+monitoring:
+  gpu_poll_interval_ms: 300
+
+output:
+  results_dir: "results"
+  gpu_timeseries: "results/{run_id}/gpu_timeseries.csv"
+  per_request: "results/{run_id}/per_request.csv"
+  summary: "results/summary.csv"
