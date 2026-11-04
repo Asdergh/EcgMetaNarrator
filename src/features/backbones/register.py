@@ -31,10 +31,11 @@ def register_backbone(owerride: bool=False):
     return decodator
 
 def get_backbone(name: str):
-    meta = __BACKBONES__.get(name, None)
+    backbone = __BACKBONES__.get(name, None)
+    _check_backbon(backbone)
     if name is None:
         warn(f"unknow backbone: {name}")
-    return meta
+    return backbone
 
 
 class FilmFiltration(nn.Module):
@@ -110,8 +111,6 @@ class BackboneWrapper(nn.Module):
             "where N - tokens lenghts. Thereforre you must check \n"
             "tour backbone forward function to satisfy this requirement.")
         return self._head(x)
-
-
 
 class MetaFeaturesMixer(nn.Module):
     def __init__(self, 

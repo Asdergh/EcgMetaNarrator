@@ -61,14 +61,27 @@ def init_weights(m):
 @dataclass
 class featuresOutput:
     feature_maps: Optional[Tuple[th.Tensor]]=None
-    embeddings: Optional[th.Tensor]=None
+    last_hiddden_state: Optional[th.Tensor]=None
     prediction: Optional[th.Tensor]=None
 
 class BaseFeaturesModel(nn.Module, abc.ABC):
     _repo_id: str="DeltaRim/corinteltech"
-    def __init__(self, state_dict: Optional[Dict[Any, th.Tensor]]=None):
+    def __init__(self):
         super(BaseFeaturesModel, self).__init__()
-        self._model = timm.create_model(self._acronim, pretrained=False, in_chans=12, num_classes=12)
+
+    def set_num_classes(self, n: int):
+        """set n classes for classification. """
+        self._n_classes = n
+        
+    def init_model(self, state_dict: Optional[Dict[Any, Any]]=None, **kwargs):
+        """initialize timm model. """
+        n_classes = kwargs.pop("num_classes", None)
+        n_classes = n_classes if n_classes is not None else 1
+        self._model = timm.create_model(self._acronim, 
+                                        pretrained=False, 
+                                        in_chans=12, 
+                                        num_classes=n_classes, 
+                                        **kwargs)
         if state_dict is not None:
             try:
                 self._model.load_state_dict(state_dict)
@@ -102,34 +115,44 @@ class BaseFeaturesModel(nn.Module, abc.ABC):
             tfs = nn.Identity()
         return tfs
     
-    def save2hf(self):
+    def save2hf(self, fname: str):
+        fname = fname if fname is not None else "backbone"
         api = HfApi()
         state_dict = self._model.state_dict()
+        if hasattr(self, "_n_classes"):
+            state_dict["n_classes"] = self._n_classes
         with tempfile.NamedTemporaryFile(suffix=".bin", delete=False) as tmp:
             tmpf = Path(tmp.name)
             try:
                 th.save(state_dict, tmpf)
                 api.upload_file(repo_id=self._repo_id,
                                 repo_type="model",
-                                path_in_repo= "{}/backbone.bin".format(self._name),
+                                path_in_repo= "{}/{}.bin".format(self._name, fname),
                                 path_or_fileobj=str(tmpf))
             finally:
                 tmpf.unlink(missing_ok=True)
-        
+
     @classmethod
-    def load(cls):
-        hf_path = "{}/backbone.bin".format(cls._name)
-        print(hf_path)
+    def list_versions(cls):
+        api = HfApi()
+        return [f.split("/")[-1].replace(".bin", "") 
+                for f in api.list_repo_files() 
+                if f.startswith(f"{cls._name}")]
+    
+    @classmethod
+    def load(cls, version_fname: str):
+        hf_path = "{}/{}.bin".format(cls._name, version_fname)
+        cls = cls()
         if file_exists(repo_id=cls._repo_id, 
                     filename=hf_path):
             statesf = hf_hub_download(repo_id=cls._repo_id,
                                         filename=hf_path,
                                         repo_type="model")
             state_dict = th.load(statesf, map_location="cpu")
-            cls = cls(state_dict=state_dict)
+            n_classes = state_dict.pop("n_classes", None)
+            cls.init_model(state_dict, num_classes=n_classes)
         else:
             warn(f"coudn't find model weigths version at: {cls._repo_id}")
-            cls = cls()
         return cls
 
 @register_backbone()
@@ -137,7 +160,11 @@ class featuresFasterNet(BaseFeaturesModel):
     _name: str="fasternet"
     _embedding_dim: int=320
     _acronim: str="fasternet_t0.in1k"
-    
+
+    def __init__(self):
+        super(featuresFasterNet, self).__init__()
+        self.init_model()
+
     def forward(self, 
                 raw: th.Tensor, 
                 fs: float, 
@@ -163,37 +190,46 @@ class featuresFasterNet(BaseFeaturesModel):
             x_cls = layer(x_cls)
 
         return featuresOutput(prediction=x_cls,
-                            embeddings=features.flatten(start_dim=-2).transpose(-1, -2),
-                            feature_maps=intermediates)
+                            feature_maps=intermediates,
+                            last_hidden_state=features.flatten(start_dim=-2).transpose(-1, -2))
 
 @register_backbone()
 class featuresCrossVit(BaseFeaturesModel):
     _name: str = "cross_vit"
-    _embedding_dim: int = 128
+    _embedding_dim: int = 328
     _acronim: str = "crossvit_9_240.in1k"
+    _img_size: Tuple[int]=(240, 240)
 
+    def __init__(self):
+        super(featuresCrossVit, self).__init__()
+        self.init_model(img_size=self._img_size)
+        
     def forward(self,
                 raw: th.Tensor,
                 fs: float,
-                out_indices: Optional[List[int]] = None,
-                out_branch: Literal["128", "256"] = "128"):
-
+                out_branch: int=0,
+                **kwargs):
+        
         raw = _check_input(raw)
         dense = raw_sig2spec(raw=raw, sampling_rate=fs)
         dense = self._tf(dense)
 
-        xs = self._model.forward_features(dense)
-        features = xs[0] if out_branch == "128" else xs[1]
-
-        embeddings = features.mean(dim=1)
-
-        return featuresOutput(
-            prediction=None,
-            embeddings=embeddings,
-            feature_maps=[],
-        )
+        features = self._model.forward_features(dense)
+        embedding = th.cat([f[:, 0, :] for f in features], dim=-1)
+        predictions = self._model.forward_head(features)
+        return featuresOutput(prediction=predictions[out_branch], last_hidden_state=embedding)
 
 
+
+if __name__ == "__main__":
+
+    model = featuresCrossVit()
+    fs = 500
+    T = 10
+    n = int(T * fs)
+    data = th.normal(0, 1, (1, 12, n))
+    output = model(data, fs=fs)
+    print(output.prediction[0].shape)
 
 
 

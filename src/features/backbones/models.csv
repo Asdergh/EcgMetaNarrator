@@ -52,7 +52,7 @@
 357,efficientvit_b1.r224_in1k,9102024,,256
 358,efficientvit_b1.r256_in1k,9102024,,256
 359,efficientvit_b1.r288_in1k,9102024,,256
-375,efficientvit_m0.r224_in1k,2349436,,192
+375,efficientvit_m0.r224_in1k,2349436,,
 376,efficientvit_m1.r224_in1k,2980560,,192
 377,efficientvit_m2.r224_in1k,4187554,,224
 378,efficientvit_m3.r224_in1k,6900722,,320
