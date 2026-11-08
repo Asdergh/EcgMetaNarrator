@@ -1,6 +1,6 @@
 """Датасеты: метки и загрузчики."""
 
-from collections.abc import Callable, Iterator
+from collections.abc import Callable, Iterable, Iterator, Sequence
 from typing import Any
 
 LABELS: dict[str, dict[str, dict[str, Any]]] = {}
@@ -50,13 +50,28 @@ def get_labels(name: str) -> dict[str, dict[str, Any]]:
     return LABELS[name]
 
 
-def label_to_vector(dataset: str, acronym: str) -> list[int]:
+def categorical_vec(dataset: str, acronyms: Iterable[str]) -> list[int]:
     labels = get_labels(dataset)
-    if acronym not in labels:
-        raise KeyError(f"Unknown label {acronym!r} for dataset {dataset!r}")
     vector = [0] * len(labels)
-    vector[labels[acronym]["label"]] = 1
+    for acronym in acronyms:
+        if acronym not in labels:
+            raise KeyError(f"Unknown label {acronym!r} for dataset {dataset!r}")
+        vector[labels[acronym]["label"]] = 1
     return vector
+
+
+def labels_from_vector(dataset: str, vector: Sequence[int]) -> list[str]:
+    labels = get_labels(dataset)
+    if len(vector) != len(labels) or any(value not in (0, 1) for value in vector):
+        raise ValueError(f"Expected a binary vector of length {len(labels)}")
+    return [acronym for acronym, spec in labels.items() if vector[spec["label"]]]
+
+
+vector_to_labels = labels_from_vector
+
+
+def label_to_vector(dataset: str, acronym: str) -> list[int]:
+    return categorical_vec(dataset, [acronym])
 
 
 def get_label_by_idx(dataset: str, idx: int) -> str | None:

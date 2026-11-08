@@ -8,7 +8,7 @@ from typing import Any, Iterable
 
 from .mappings import map_binary_diagnosis, map_challenge2020_tokens
 from .readers import _header_metadata
-from .registry import register_labels, register_loader
+from .registry import categorical_vec, register_labels, register_loader
 
 
 def _limit(items: Iterable[dict[str, Any]], limit: int | None):
@@ -109,13 +109,13 @@ def load_ptbxl(root: str | Path, split: str | None = None, limit: int | None = N
                 codes = ast.literal_eval(raw)
             except (SyntaxError, ValueError):
                 codes = {}
-            label = next((key for key in ("NORM", "MI", "STTC", "CD", "HYP") if key in codes), None)
-            if label is None:
+            acronyms = [key for key in ("NORM", "MI", "STTC", "CD", "HYP") if key in codes]
+            if not acronyms:
                 continue
             record = _record_path(root_path / filename)
             if not _has_signal_pair(record, ".dat"):
                 continue
-            yield {"file_path": str(record), "label": label, "meta": _record_meta(
+            yield {"file_path": str(record), "label": categorical_vec("ptbxl", acronyms), "meta": _record_meta(
                 record, codes, ecg_id=row.get("ecg_id"), age=row.get("age"),
                 sex=row.get("sex"), strat_fold=row.get("strat_fold"),
             )}
@@ -124,7 +124,7 @@ def load_ptbxl(root: str | Path, split: str | None = None, limit: int | None = N
                 return
 
 
-def _load_header_labels(root: Path, labels: set[str], limit: int | None, **_: Any):
+def _load_header_labels(root: Path, dataset: str, labels: set[str], limit: int | None, **_: Any):
     yielded = 0
     for header in sorted(root.rglob("*.hea")):
         raw = _header_value(header, "Dx")
@@ -137,7 +137,7 @@ def _load_header_labels(root: Path, labels: set[str], limit: int | None, **_: An
         record = header.with_suffix("")
         if not _has_signal_pair(record, ".dat"):
             continue
-        yield {"file_path": str(record), "label": label, "meta": _record_meta(record, raw)}
+        yield {"file_path": str(record), "label": categorical_vec(dataset, [label]), "meta": _record_meta(record, raw)}
         yielded += 1
         if limit is not None and yielded >= limit:
             return
@@ -145,12 +145,12 @@ def _load_header_labels(root: Path, labels: set[str], limit: int | None, **_: An
 
 @register_loader("ptbdb")
 def load_ptbdb(root: str | Path, limit: int | None = None, **kwargs: Any):
-    yield from _load_header_labels(Path(root), set(PTBDB_LABELS), limit, **kwargs)
+    yield from _load_header_labels(Path(root), "ptbdb", set(PTBDB_LABELS), limit, **kwargs)
 
 
 @register_loader("ludb")
 def load_ludb(root: str | Path, limit: int | None = None, **kwargs: Any):
-    yield from _load_header_labels(Path(root), set(LUDB_LABELS), limit, **kwargs)
+    yield from _load_header_labels(Path(root), "ludb", set(LUDB_LABELS), limit, **kwargs)
 
 
 @register_loader("challenge2020")
@@ -159,13 +159,13 @@ def load_challenge2020(root: str | Path, limit: int | None = None, **_: Any):
     for header in sorted(Path(root).rglob("*.hea")):
         raw = _header_value(header, "Dx")
         tokens = {_normalise_token(value) for value in (raw or "").split(",")}
-        label = map_challenge2020_tokens(tokens)
-        if label is None:
+        acronyms = map_challenge2020_tokens(tokens)
+        if not acronyms:
             continue
         record = header.with_suffix("")
         if not _has_signal_pair(record, ".mat"):
             continue
-        yield {"file_path": str(record), "label": label, "meta": _record_meta(record, raw)}
+        yield {"file_path": str(record), "label": categorical_vec("challenge2020", acronyms), "meta": _record_meta(record, raw)}
         yielded += 1
         if limit is not None and yielded >= limit:
             return
@@ -186,14 +186,14 @@ def load_challenge2018(root: str | Path, limit: int | None = None, **_: Any):
         if not raw:
             continue
         label = "APNEA" if raw.count("A") > raw.count("N") else "NO_APNEA"
-        yield {"file_path": str(record), "label": label, "meta": _record_meta(record, raw)}
+        yield {"file_path": str(record), "label": categorical_vec("challenge2018", [label]), "meta": _record_meta(record, raw)}
         yielded += 1
         if limit is not None and yielded >= limit:
             return
 
 
 def _read_apnea_annotation(path: Path) -> list[str] | None:
-    """Return apnea annotation symbols without reading the ECG signal."""
+    """Возвращает символы аннотации апноэ без чтения сигнала ЭКГ."""
     try:
         import wfdb
         annotation = wfdb.rdann(str(path.with_suffix("")), "apn")
