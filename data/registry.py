@@ -28,9 +28,9 @@ def register_labels(name: str, labels: dict[str, dict[str, Any]]) -> None:
     LABELS[name] = labels
 
 
-def register_loader(name: str):
+def register_loader(name: str, *, require_labels: bool = True):
     def decorator(fn: Callable[..., Iterator[dict[str, Any]]]):
-        if name not in LABELS:
+        if require_labels and name not in LABELS:
             raise ValueError(f"No labels registered for dataset: {name}")
         LOADERS[name] = fn
         return fn

@@ -48,13 +48,6 @@ def _has_signal_pair(record: Path, signal_suffix: str) -> bool:
     return record.with_suffix(".hea").is_file() and record.with_suffix(signal_suffix).is_file()
 
 
-PTBXL_LABELS = {
-    "NORM": {"description": "Normal ECG", "label": 0},
-    "MI": {"description": "Myocardial infarction", "label": 1},
-    "STTC": {"description": "ST/T change", "label": 2},
-    "CD": {"description": "Conduction disturbance", "label": 3},
-    "HYP": {"description": "Hypertrophy", "label": 4},
-}
 PTBDB_LABELS = {
     "NORMAL": {"description": "Normal ECG", "label": 0},
     "ABNORMAL": {"description": "Abnormal ECG", "label": 1},
@@ -80,7 +73,6 @@ LUDB_LABELS = {
 }
 
 for _name, _labels in {
-    "ptbxl": PTBXL_LABELS,
     "ptbdb": PTBDB_LABELS,
     "challenge2020": CHALLENGE2020_LABELS,
     "challenge2018": CHALLENGE2018_LABELS,
@@ -89,12 +81,44 @@ for _name, _labels in {
     register_labels(_name, _labels)
 
 
-@register_loader("ptbxl")
+def _load_ptbxl_labels(root: Path) -> dict[str, dict[str, Any]]:
+    annotation_path = root / "scp_statements.csv"
+    if not annotation_path.is_file():
+        raise FileNotFoundError(f"PTB-XL label annotation file not found: {annotation_path}")
+
+    labels: dict[str, dict[str, Any]] = {}
+    with annotation_path.open(newline="", encoding="utf-8-sig") as stream:
+        rows = csv.DictReader(stream)
+        if not rows.fieldnames or "scp_code" not in rows.fieldnames:
+            raise ValueError(
+                f"PTB-XL label annotation file must contain an 'scp_code' column: {annotation_path}"
+            )
+        for row in rows:
+            acronym = (row.get("scp_code") or "").strip()
+            if not acronym:
+                continue
+            description = (row.get("description") or "").strip()
+            if not description:
+                raise ValueError(
+                    f"PTB-XL label {acronym!r} has no description in {annotation_path}"
+                )
+            if acronym in labels:
+                raise ValueError(f"Duplicate PTB-XL label {acronym!r} in {annotation_path}")
+            labels[acronym] = {"description": description, "label": len(labels)}
+
+    if not labels:
+        raise ValueError(f"PTB-XL label annotation file contains no labels: {annotation_path}")
+    register_labels("ptbxl", labels)
+    return labels
+
+
+@register_loader("ptbxl", require_labels=False)
 def load_ptbxl(root: str | Path, split: str | None = None, limit: int | None = None, **_: Any):
     root_path = Path(root)
     csv_path = root_path / "ptbxl_database.csv"
     if not csv_path.exists():
         raise FileNotFoundError(f"PTB-XL metadata file not found: {csv_path}")
+    labels = _load_ptbxl_labels(root_path)
     with csv_path.open(newline="", encoding="utf-8") as stream:
         rows = csv.DictReader(stream)
         yielded = 0
@@ -109,7 +133,7 @@ def load_ptbxl(root: str | Path, split: str | None = None, limit: int | None = N
                 codes = ast.literal_eval(raw)
             except (SyntaxError, ValueError):
                 codes = {}
-            acronyms = [key for key in ("NORM", "MI", "STTC", "CD", "HYP") if key in codes]
+            acronyms = [key for key in codes if key in labels]
             if not acronyms:
                 continue
             record = _record_path(root_path / filename)

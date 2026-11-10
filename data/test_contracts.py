@@ -19,7 +19,7 @@ from .loaders import _read_apnea_annotation
 
 class RegistryContractTests(unittest.TestCase):
     def test_builtin_registries_and_round_trip(self):
-        self.assertEqual(set(LABELS), set(LOADERS))
+        self.assertTrue(set(LABELS).issubset(LOADERS))
         for dataset, labels in LABELS.items():
             self.assertEqual({value["label"] for value in labels.values()}, set(range(len(labels))))
             for acronym, spec in labels.items():
@@ -40,6 +40,13 @@ class RegistryContractTests(unittest.TestCase):
                 "1,records100/00001,records100/00001,\"{'NORM': 100, 'MI': 80}\",50,M,1\n",
                 encoding="utf-8",
             )
+            (root / "scp_statements.csv").write_text(
+                "scp_code,description\n"
+                "NORM,Normal ECG\n"
+                "MI,Myocardial infarction\n"
+                "CUSTOM,Custom finding\n",
+                encoding="utf-8",
+            )
             record = root / "records100/00001"
             record.parent.mkdir()
             record.with_suffix(".hea").write_text("12 100 1\n", encoding="ascii")
@@ -47,8 +54,33 @@ class RegistryContractTests(unittest.TestCase):
             result = next(LOADERS["ptbxl"](root))
             self.assertEqual(result["file_path"], str(root / "records100/00001"))
             self.assertEqual(set(result), {"file_path", "label", "meta"})
-            self.assertEqual(result["label"], [1, 1, 0, 0, 0])
+            self.assertEqual(result["label"], [1, 1, 0])
             self.assertEqual(result["meta"]["label_raw"], {"NORM": 100, "MI": 80})
+
+    def test_ptbxl_uses_all_annotation_labels(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / "ptbxl_database.csv").write_text(
+                "ecg_id,filename_hr,filename_lr,scp_codes,age,sex,strat_fold\n"
+                "1,records100/00001,,\"{'NORM': 100, 'CUSTOM': 80, 'NOT_IN_ANNOTATIONS': 100}\",50,M,1\n",
+                encoding="utf-8",
+            )
+            (root / "scp_statements.csv").write_text(
+                "scp_code,description\n"
+                "NORM,Normal ECG\n"
+                "CUSTOM,Custom finding\n"
+                "UNUSED,Unused finding\n",
+                encoding="utf-8",
+            )
+            record = root / "records100/00001"
+            record.parent.mkdir()
+            record.with_suffix(".hea").write_text("12 100 1\n", encoding="ascii")
+            record.with_suffix(".dat").write_bytes(b"")
+
+            result = next(LOADERS["ptbxl"](root))
+            self.assertEqual(result["label"], [1, 1, 0])
+            self.assertEqual(len(LABELS["ptbxl"]), 3)
+            self.assertEqual(LABELS["ptbxl"]["UNUSED"]["description"], "Unused finding")
 
     def test_header_loaders_require_known_labels_and_signal_pairs(self):
         with tempfile.TemporaryDirectory() as directory:
