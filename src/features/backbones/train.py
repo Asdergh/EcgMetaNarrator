@@ -13,132 +13,104 @@ from .register import get_backbone
 from heapq import (heappop, heappush, heapreplace, heapify)
 from dataclasses import dataclass, field
 
-# @dataclass(order=True)
-# class Checkpoint:
-#     metric: float=field(compare=True)
-#     state_dict: Dict[str, Any]=field(compare=False)
-#     def save(self, path: str):
-#         "save checkpoin path as .ckpt pickle file. "
-#         if os.path.exists(path):
-#             th.save(self.state_dict, path)
-        
-# class CheckpointsCallback:
-#     def __init__(self, 
-#                 module: Callable[..., nn.Module],
-#                 mode: Literal["min", "max"]="min", 
-#                 k: int=3,
-#                 name: Optional[str]=None):
-#         self._k = k
-#         self._mode = mode
-#         self._moule = module
-#         self._name = name if name is not None else "model"
-#         self._heap: List[Checkpoint] = []
-
-#     def save(self, path: str):
-#         """save collected checkpoints. """
-#         root = os.path.join(path, self._naem)
-#         os.makedirs(root)
-#         for idx, state in enumerate(self._heap):
-#             fname = os.path.join(root, f"params_v_{idx}.ckpt")
-#             state.save(fname)
-
-#     def push(self, value: float):
-#         state = Checkpoint(value, self._module.state_dict())
-#         if len(self._heap) < self._k:
-#             heappush(self._heap, state)
-#         else:
-#             if self._mode == "min" \
-#                 and (state < self._heap[0]):
-#                 heapreplace(self._heap, state)
-#             elif self._mode == "max" \
-#                 and (state > self._heap[0]):
-#                 heapreplace(self._heap, state)
-    
-#     def pop(self):
-#         return heappop(self._heap)
-    
-#     def __len__(self):
-#         return len(self._heap)
-
-# __OPTIMIZERS__ = {"adam": Adam, "sgd": SGD}
-# def get_optimizer(name: str, **kwwargs):
-#     """choose optimizer. """
-#     opt = __OPTIMIZERS__.get(name.islower())
-#     assert (opt is not None), (f"coudn't find optimizer: {name}")
-#     return opt(**kwwargs)
-
-# def _get_loader(name: str, 
-#                 root: str, 
-#                 batch_size: int=32, 
-#                 shuffle: bool=False):
-#     """get data loader. """
-#     dataset = EcgAnnotationDataset(root=root, loader=name)
-#     return DataLoader(dataest=dataset, shuffle=shuffle, batch_size=batch_size)
-
-
-
-# def batch_step_backbone(model: Callable[..., nn.Module],
-#                         batch: Dict[str, th.Tensor],
-#                         optimizer: Optional[Optimizer]=None,
-#                         loss_module: Optional[Callable[..., nn.Module]]=None):
-#     """process one batch for """
-#     output = dict(zip(["loss", "predictions", "features"], [None, ]*3))
-#     assert ("raw_signal" in batch) and ("fs" in batch)
-#     (raw, fs, label) = (batch["raw_signal"], batch["fs"], batch["label"])
-#     out = model(raw=raw, fs=fs)
-#     output["predictions"] = out.prediction
-#     output["features"] = out.last_hidden_state
-#     if loss_module is not None:
-#         loss = loss_module(out.prediction, label)
-#         output["loss"] = loss
-#         if optimizer is not None:
-#             loss.backward()
-#             optimizer.step()
-#             optimizer.zero_grad()
-        
-#     return output
-
-# def evalute(backbone: str,
-#             loader: str,
-#             data_root: str,
-#             out_path: str,
-#             epochs: int=1000,
-#             batch_size: int=32,
-#             shuffle: bool=False,
-#             verbose: bool=False,
-#             mode: Literal["train", "val"]="val",
-#             optimizer: Literal["adam", "sgb"]="adam",
-#             optimizer_config: Dict[str, Any]={},):
-#     """backbone evaluation function. """
-#     backbone = get_backbone(backbone)
-#     checkpoints = CheckpointsCallback(backbone)
-#     loader = _get_loader(loader, data_root, batch_size, shuffle)
-#     if mode == "train":
-#         optimizer = get_optimizer(optimizer, **optimizer_config)
-#         backbone.train()
-#     else:
-#         backbone.eval()
-
-#     loss_module = loss_module
-#     for epoch in range(epochs):
-#         for (batch_idx, batch) in enumerate(loader):
-#             if mode == "val":
-#                 with th.no_grad():
-#                     batch_pkg = batch_step_backbone(backbone, batch, optimizer, loss_module)
-#             else:
-#                 batch_pkg = batch_step_backbone(backbone, batch, optimizer, loss_module)
-#                 if verbose:
-#                     pass
-#         if mode == "train":
-            
-
-#     if mode == "train":
-#         os.makedirs(out_path, exist_ok=True)
-
+import numpy as np
 from warnings import warn
 from .criterion import MultiBCECriterion
 import lightning as l
+from ....data import get_loader
+from torch.utils.data import Dataset
+import wfdb
+from copy import deepcopy
 
+class EcgAnnotatedSet(Dataset):
+    def __init__(self, meta: List[Dict[str, Any]], get_raw: bool=True):
+        self._meta = meta
+        self._get_raw = get_raw
+        self._raw_cache: Dict[int, th.Tensor] = {}
+
+    def _get_sample(self, idx: int):
+        """get samples and cache signals. """
+        sample = deepcopy(self._meta[idx])
+        if idx not in self._raw_cache:
+            raw = th.from_numpy(wfdb\
+                                .rdrecord(sample["file_path"])\
+                                .p_signal\
+                                .transpose(0, 1)).float()
+            self._raw_cache[idx] = raw
+        sample["raw_signal"] = self._raw_cache[idx]
+        return sample
+
+    def __len__(self):
+        return len(self._meta)
+
+    def __getitem__(self, idx: int):
+        if idx == len(self):
+            raise IndexError("out of range for EcgAnnotatedSet with len: {}".format(len(self)))
+        return self._get_sample(idx) \
+                if self._get_raw \
+                else self._meta[idx]
+    
+class BackboneDataModule(l.LightningDataModule):
+    def __init__(self, 
+                root: str, 
+                loader: str, 
+                loader_cfg: Optional[dict]=None,
+                splits_vols: List[float]=[0.5, 0.4, 0.1],
+                batch_size: int=32,
+                shuffle: bool=False):
+        super(BackboneDataModule, self).__init__()
+        self._loader_name = loader
+        self._loader_cfg = loader_cfg
+        self._data_root = root
+        self._splits_vols = splits_vols
+        self._batch_size = batch_size
+        self._shuffle = shuffle
+        assert len(self._splits_vols) == 3
+        assert abs(sum(self._splits_vols) - 1) < 1e-6
+
+    def prepare_data(self):
+        """load data meta storage and create data splits. """
+        loader_cfg = {} if self._loader_cfg is None else self._loader_cfg
+        self._meta = list(get_loader(self._loader_name, root=self._data_root, **loader_cfg))
+
+        parts = np.cumsum(
+            np.asarray([len(self._meta) * p for p in self._splits_vols])
+        ).astype(np.int32).tolist()
+        self._splits = {"train": self._meta[0:parts[0]],
+                        "validate": self._meta[parts[0]:parts[1]],
+                        "test": self._meta[parts[1]:]}
+
+    def setup(self, stage: str):
+        """setup train/validate/test dataset splits. """
+        if stage in ("vlaidate", "fit"):
+            self._train_dataset = EcgAnnotatedSet(meta=self._splits["train"])
+            self._val_dataset = EcgAnnotatedSet(meta=self._splits["validate"])
+        elif stage == "test":
+            self._test_dataset = EcgAnnotatedSet(meta=self._splits["test"])
+
+    def train_dataloader(self):
+        if hasattr(self, "_train_dataset"):
+            return DataLoader(dataset=self._train_dataset, 
+                            batch_size=self._batch_size, 
+                            shuffle=self._shuffle)
+        else:
+            return 
+    def val_dataloader(self):
+        if hasattr(self, "_validate_dataset"):
+            return DataLoader(dataset=self._validate_dataset, 
+                            batch_size=self._batch_size, 
+                            shuffle=self._shuffle)
+        else:
+                return 
+    def test_dataloader(self):
+        if hasattr(self, "_test_dataset"):
+            return DataLoader(dataset=self._test_dataset, 
+                            batch_size=self._batch_size, 
+                            shuffle=self._shuffle)
+        else:
+            return 
+
+    
 class BackboneTrianingContainer(l.LightningModule):
     def __init__(self, 
                 module_name: str,
@@ -221,21 +193,3 @@ class BackboneTrianingContainer(l.LightningModule):
             self._save_weights(value)
 
 
-
-
-def train(backbone: str,
-        criterion: str,
-        train_loader: str,
-        train_loader_root: str,
-        val_loader: Optional[str]=None,
-        val_loader_root: Optional[str]=None,
-        epochs: int=1000,
-        batch_size: int=32,
-        shuffle: bool=False,
-        initial_lr: float=0.01,
-        lr_exponential_gamma: float=0.95):
-    """main training function for BackboneTrainingContainer. """
-    criterion = get_criterion(criterion)
-    container = BackboneTrianingContainer(backbone, 
-                                        criterion=criterion,
-                                        mode=)

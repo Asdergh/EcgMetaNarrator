@@ -221,15 +221,9 @@ class featuresCrossVit(BaseFeaturesModel):
 
 
 
-if __name__ == "__main__":
+# if __name__ == "__main__":
 
-    model = featuresCrossVit()
-    fs = 500
-    T = 10
-    n = int(T * fs)
-    data = th.normal(0, 1, (1, 12, n))
-    output = model(data, fs=fs)
-    print(output.prediction[0].shape)
+#     pass
 
 
 
