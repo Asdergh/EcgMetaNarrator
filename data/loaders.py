@@ -8,7 +8,7 @@ from typing import Any, Iterable
 
 from .mappings import map_binary_diagnosis, map_challenge2020_tokens
 from .readers import _header_metadata
-from .registry import categorical_vec, register_labels, register_loader
+from .registry import categorical_vec, register_labels, register_loader, get_labels
 
 
 def _limit(items: Iterable[dict[str, Any]], limit: int | None):
@@ -118,7 +118,10 @@ def load_ptbxl(root: str | Path, split: str | None = None, limit: int | None = N
     csv_path = root_path / "ptbxl_database.csv"
     if not csv_path.exists():
         raise FileNotFoundError(f"PTB-XL metadata file not found: {csv_path}")
-    labels = _load_ptbxl_labels(root_path)
+    try:
+        labels = get_labels("ptbxl")
+    except BaseException:
+        labels = _load_ptbxl_labels(root_path)
     with csv_path.open(newline="", encoding="utf-8") as stream:
         rows = csv.DictReader(stream)
         yielded = 0
