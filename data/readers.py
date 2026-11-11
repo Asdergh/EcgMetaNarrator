@@ -1,4 +1,4 @@
-"""Signal readers. Loaders intentionally do not call this module."""
+"""Считыватели сигналов. Загрузчики намеренно не вызывают этот модуль."""
 
 from pathlib import Path
 from typing import Any

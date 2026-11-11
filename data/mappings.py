@@ -1,4 +1,4 @@
-"""Mappings from archive-specific diagnosis tokens to canonical labels."""
+"""Сопоставления диагностических маркеров, относящихся к конкретному архиву, с каноническими метками."""
 
 CHALLENGE2020_CODE_MAP = {
     "426783006": "NORM",
@@ -23,9 +23,9 @@ ABNORMAL_DIAGNOSIS_TOKENS = {
 }
 
 
-def map_challenge2020_tokens(tokens: set[str]) -> str | None:
+def map_challenge2020_tokens(tokens: set[str]) -> list[str]:
     mapped = {CHALLENGE2020_CODE_MAP.get(token, token) for token in tokens}
-    return next((label for label in CHALLENGE2020_PRIORITY if label in mapped), None)
+    return [label for label in CHALLENGE2020_PRIORITY if label in mapped]
 
 
 def map_binary_diagnosis(token: str) -> str | None:

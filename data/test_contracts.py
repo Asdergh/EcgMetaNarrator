@@ -5,13 +5,21 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
 
-from . import LABELS, LOADERS, SignalReader, get_label_by_idx, label_to_vector
+from . import (
+    LABELS,
+    LOADERS,
+    SignalReader,
+    categorical_vec,
+    get_label_by_idx,
+    label_to_vector,
+    labels_from_vector,
+)
 from .loaders import _read_apnea_annotation
 
 
 class RegistryContractTests(unittest.TestCase):
     def test_builtin_registries_and_round_trip(self):
-        self.assertEqual(set(LABELS), set(LOADERS))
+        self.assertTrue(set(LABELS).issubset(LOADERS))
         for dataset, labels in LABELS.items():
             self.assertEqual({value["label"] for value in labels.values()}, set(range(len(labels))))
             for acronym, spec in labels.items():
@@ -19,12 +27,24 @@ class RegistryContractTests(unittest.TestCase):
                 self.assertEqual(sum(vector), 1)
                 self.assertEqual(get_label_by_idx(dataset, spec["label"]), acronym)
 
+    def test_categorical_vector_round_trip(self):
+        vector = categorical_vec("challenge2020", ["AF", "PVC", "STE"])
+        self.assertEqual(vector, [0, 1, 0, 0, 0, 0, 1, 0, 1])
+        self.assertEqual(labels_from_vector("challenge2020", vector), ["AF", "PVC", "STE"])
+
     def test_ptbxl_loader_is_descriptor_only(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             (root / "ptbxl_database.csv").write_text(
                 "ecg_id,filename_hr,filename_lr,scp_codes,age,sex,strat_fold\n"
-                "1,records100/00001,records100/00001,\"{'NORM': 100}\",50,M,1\n",
+                "1,records100/00001,records100/00001,\"{'NORM': 100, 'MI': 80}\",50,M,1\n",
+                encoding="utf-8",
+            )
+            (root / "scp_statements.csv").write_text(
+                "scp_code,description\n"
+                "NORM,Normal ECG\n"
+                "MI,Myocardial infarction\n"
+                "CUSTOM,Custom finding\n",
                 encoding="utf-8",
             )
             record = root / "records100/00001"
@@ -34,8 +54,33 @@ class RegistryContractTests(unittest.TestCase):
             result = next(LOADERS["ptbxl"](root))
             self.assertEqual(result["file_path"], str(root / "records100/00001"))
             self.assertEqual(set(result), {"file_path", "label", "meta"})
-            self.assertEqual(result["label"], "NORM")
-            self.assertEqual(result["meta"]["label_raw"], {"NORM": 100})
+            self.assertEqual(result["label"], [1, 1, 0])
+            self.assertEqual(result["meta"]["label_raw"], {"NORM": 100, "MI": 80})
+
+    def test_ptbxl_uses_all_annotation_labels(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / "ptbxl_database.csv").write_text(
+                "ecg_id,filename_hr,filename_lr,scp_codes,age,sex,strat_fold\n"
+                "1,records100/00001,,\"{'NORM': 100, 'CUSTOM': 80, 'NOT_IN_ANNOTATIONS': 100}\",50,M,1\n",
+                encoding="utf-8",
+            )
+            (root / "scp_statements.csv").write_text(
+                "scp_code,description\n"
+                "NORM,Normal ECG\n"
+                "CUSTOM,Custom finding\n"
+                "UNUSED,Unused finding\n",
+                encoding="utf-8",
+            )
+            record = root / "records100/00001"
+            record.parent.mkdir()
+            record.with_suffix(".hea").write_text("12 100 1\n", encoding="ascii")
+            record.with_suffix(".dat").write_bytes(b"")
+
+            result = next(LOADERS["ptbxl"](root))
+            self.assertEqual(result["label"], [1, 1, 0])
+            self.assertEqual(len(LABELS["ptbxl"]), 3)
+            self.assertEqual(LABELS["ptbxl"]["UNUSED"]["description"], "Unused finding")
 
     def test_header_loaders_require_known_labels_and_signal_pairs(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -50,8 +95,8 @@ class RegistryContractTests(unittest.TestCase):
 
             ptbdb = list(LOADERS["ptbdb"](root))
             ludb = list(LOADERS["ludb"](root))
-            self.assertEqual([item["label"] for item in ptbdb], ["NORMAL"])
-            self.assertEqual([item["label"] for item in ludb], ["NORMAL"])
+            self.assertEqual([item["label"] for item in ptbdb], [[1, 0]])
+            self.assertEqual([item["label"] for item in ludb], [[1, 0]])
             self.assertEqual(ptbdb[0]["file_path"], str(normal))
 
     def test_challenge2020_maps_snomed_codes_and_requires_mat_pair(self):
@@ -67,7 +112,7 @@ class RegistryContractTests(unittest.TestCase):
 
             records = list(LOADERS["challenge2020"](root))
             self.assertEqual(len(records), 1)
-            self.assertEqual(records[0]["label"], "AF")
+            self.assertEqual(records[0]["label"], [1, 1, 0, 0, 0, 0, 0, 0, 0])
             self.assertEqual(records[0]["meta"]["n_sig"], 12)
 
     def test_challenge2018_uses_apn_sidecar_and_honors_limit(self):
@@ -81,7 +126,7 @@ class RegistryContractTests(unittest.TestCase):
 
             records = list(LOADERS["challenge2018"](root, limit=1))
             self.assertEqual(len(records), 1)
-            self.assertEqual(records[0]["label"], "APNEA")
+            self.assertEqual(records[0]["label"], [0, 1])
 
     def test_challenge2018_reads_binary_annotations_through_wfdb(self):
         with tempfile.TemporaryDirectory() as directory:
