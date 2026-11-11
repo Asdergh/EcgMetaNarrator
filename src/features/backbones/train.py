@@ -1,10 +1,8 @@
 import torch as th
 import torch.nn as nn
 import torch.nn.functional as F
-import wandb
 import os
 from torch.utils.data import DataLoader
-from  data import EcgAnnotationDataset
 from typing import Dict, List, Tuple, Optional, Any, Callable, Literal
 from torch.optim import Optimizer, Adam, SGD
 from torch.optim.lr_scheduler import ExponentialLR
@@ -15,12 +13,12 @@ from dataclasses import dataclass, field
 
 import numpy as np
 from warnings import warn
-from .criterion import MultiBCECriterion
 import lightning as l
-from ....data import get_loader
 from torch.utils.data import Dataset
 import wfdb
 from copy import deepcopy
+from data import get_loader, get_ptbxl_with_pruning
+from .criterion import MultiBCECriterion
 
 class EcgAnnotatedSet(Dataset):
     def __init__(self, meta: List[Dict[str, Any]], get_raw: bool=True):
@@ -32,12 +30,13 @@ class EcgAnnotatedSet(Dataset):
         """get samples and cache signals. """
         sample = deepcopy(self._meta[idx])
         if idx not in self._raw_cache:
-            raw = th.from_numpy(wfdb\
-                                .rdrecord(sample["file_path"])\
-                                .p_signal\
-                                .transpose(0, 1)).float()
+            meta = wfdb.rdrecord(sample["file_path"])
+            fs = meta.fs
+            raw = th.from_numpy(meta.p_signal).float().transpose(0, 1)
             self._raw_cache[idx] = raw
         sample["raw_signal"] = self._raw_cache[idx]
+        sample["fs"] = fs
+        sample["label"] = th.asarray(sample["label"]).to(th.long)
         return sample
 
     def __len__(self):
@@ -46,9 +45,10 @@ class EcgAnnotatedSet(Dataset):
     def __getitem__(self, idx: int):
         if idx == len(self):
             raise IndexError("out of range for EcgAnnotatedSet with len: {}".format(len(self)))
-        return self._get_sample(idx) \
-                if self._get_raw \
-                else self._meta[idx]
+        sample = self._get_sample(idx)
+        return {key: value 
+                for (key, value) in sample.items() 
+                if key in ["raw_signal", "label", "fs"]}
     
 class BackboneDataModule(l.LightningDataModule):
     def __init__(self, 
@@ -71,7 +71,10 @@ class BackboneDataModule(l.LightningDataModule):
     def prepare_data(self):
         """load data meta storage and create data splits. """
         loader_cfg = {} if self._loader_cfg is None else self._loader_cfg
-        self._meta = list(get_loader(self._loader_name, root=self._data_root, **loader_cfg))
+        if self._loader_name == "ptbxl":
+            self._meta = list(get_ptbxl_with_pruning(root=self._data_root, **loader_cfg)["loader"])
+        else:
+            self._meta = list(get_loader(self._loader_name, root=self._data_root, **loader_cfg))
 
         parts = np.cumsum(
             np.asarray([len(self._meta) * p for p in self._splits_vols])
@@ -84,7 +87,7 @@ class BackboneDataModule(l.LightningDataModule):
         """setup train/validate/test dataset splits. """
         if stage in ("vlaidate", "fit"):
             self._train_dataset = EcgAnnotatedSet(meta=self._splits["train"])
-            self._val_dataset = EcgAnnotatedSet(meta=self._splits["validate"])
+            self._validate_dataset = EcgAnnotatedSet(meta=self._splits["validate"])
         elif stage == "test":
             self._test_dataset = EcgAnnotatedSet(meta=self._splits["test"])
 
@@ -101,7 +104,7 @@ class BackboneDataModule(l.LightningDataModule):
                             batch_size=self._batch_size, 
                             shuffle=self._shuffle)
         else:
-                return 
+            return 
     def test_dataloader(self):
         if hasattr(self, "_test_dataset"):
             return DataLoader(dataset=self._test_dataset, 
@@ -170,7 +173,6 @@ class BackboneTrianingContainer(l.LightningModule):
         (raw, fs, labels) = (batch["raw_signal"], batch["fs"], batch["labels"])
         model_out = self._backbone(raw=raw, fs=fs)
         loss_pkg = self._criterion(labels, model_out.prediction, accum=accum)
-        # self._latest_loss_value = loss.item()
         for (key, value) in loss_pkg.items():
             self.log(f"{mode}_{key}", value, on_epoch=True)
         return {"loss": loss_pkg["loss"]}
@@ -191,5 +193,3 @@ class BackboneTrianingContainer(l.LightningModule):
         self._criterion.reset()
         if (self.current_epoch % self._per_epoch) == 0:
             self._save_weights(value)
-
-
