@@ -60,9 +60,7 @@ class featuresMyBackbone(BaseFeaturesModel):
 		"""forward implementation"""
 		dense = self._tf(dense) # self._tf - is determined based on the model arguments by timm inside BaseFeaturesModel
 		...
-		return featuresOutput(features_maps,
-							last_hidden_state,
-							prediction)
+		return featuresOutput(features_maps, last_hidden_state, prediction)
 
 
 # TimeBins = TimeInSec * fs
@@ -72,10 +70,7 @@ raw, fs = ...
 dense = spectrogram(raw, fs)
 model = featuresMyBackbone()
 
-output = model(raw=raw, 
-				fs=fs, 
-				dense=(dense | None), 
-				**kwargs)
+output = model(raw=raw, fs=fs, dense=(dense | None), **kwargs)
 # it is important to remember that despite the fact that forward_impl itself works with dense, you can simply pass raw and fs to the forward of BaseFeaturesModel; it will automatically compute dense from raw and fs, or use the dense passed by the user if the latter is not None. 
 ```
 
