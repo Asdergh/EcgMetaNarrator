@@ -20,14 +20,16 @@ from torchvision.transforms import (Compose,
                                     CenterCrop)
 from dataclasses import dataclass
 import torch.nn.init as init
+from functools import wraps
 
 
 
 def _check_input(raw: th.Tensor):
+    """raw in shape: [B, C, Time]. """
     if raw.ndim > 3:
         raise ValueError("A batch of raw signals stacked into 2D Tensors expected")
-    if raw.shape[0] > raw.shape[1]:
-        raw = raw.transpose(0, 1)
+    if raw.shape[1] > raw.shape[2]:
+        raw = raw.transpose(1, 2)
     return raw
 
 def _is_rgb_tf(module) -> bool:
@@ -57,30 +59,53 @@ def init_weights(m):
         init.ones_(m.weight)
         init.zeros_(m.bias)
 
-
+def backbone_pre_forward(func: callable):
+    @wraps(func)
+    def wrapper(self, *args, **kwargs):
+        error_msg = ("BaseFeaturesModel child forward function must have one of the listed kwargs combintation:"
+                            "   . raw, fs != None | dense = None"
+                            "   . raw, fs =  None | dense != None"
+                            "   . raw, fs != None | dense != None (in this case only dense will be used in inference)")
+        is_raw = ("raw" in kwargs) and ("fs" in kwargs)
+        is_dense = ("dense" in kwargs)
+        if not (is_raw or is_dense):
+            raise ValueError(error_msg)
+        if is_dense:
+            dense = kwargs.pop("dense")
+            if dense is None:
+                raise ValueError(error_msg)
+            assert dense.ndim == 4, ("expected dense to be 4D Batch Image Tensor: [B, C, W, H]")
+            return func(self, *args, **kwargs)
+        else:
+            raw = kwargs.get("raw")
+            fs = kwargs.get("fs")
+            _check_input(raw)
+            if (raw is None) or (fs is None):
+                raise ValueError(error_msg)
+            dense = raw_sig2spec(raw=raw, sampling_rate=fs)
+            kwargs["dense"] = dense
+            return func(self, *args, **kwargs)
+    return wrapper
+        
 @dataclass
 class featuresOutput:
     feature_maps: Optional[Tuple[th.Tensor]]=None
-    last_hiddden_state: Optional[th.Tensor]=None
+    last_hidden_state: Optional[th.Tensor]=None
     prediction: Optional[th.Tensor]=None
 
 class BaseFeaturesModel(nn.Module, abc.ABC):
-    _repo_id: str="DeltaRim/corinteltech"
+    _repo_id: str=None
     def __init__(self):
         super(BaseFeaturesModel, self).__init__()
 
-    def set_num_classes(self, n: int):
-        """set n classes for classification. """
-        self._n_classes = n
-        
     def init_model(self, state_dict: Optional[Dict[Any, Any]]=None, **kwargs):
         """initialize timm model. """
         n_classes = kwargs.pop("num_classes", None)
-        n_classes = n_classes if n_classes is not None else 1
+        self._n_classes = n_classes if n_classes is not None else 1
         self._model = timm.create_model(self._acronim, 
                                         pretrained=False, 
                                         in_chans=12, 
-                                        num_classes=n_classes, 
+                                        num_classes=self._n_classes, 
                                         **kwargs)
         if state_dict is not None:
             try:
@@ -88,10 +113,6 @@ class BaseFeaturesModel(nn.Module, abc.ABC):
             except Exception as e:
                 warn(f"coudn't load state dict, due to: {e}")
         self._tf = self.get_transforms()
-
-    @abc.abstractmethod
-    def forward(self, raw: th.Tensor):
-        raise NotImplemented("features module must have forward module. ")
 
     def get_transforms(self):
         tfs = []
@@ -114,8 +135,16 @@ class BaseFeaturesModel(nn.Module, abc.ABC):
         else:
             tfs = nn.Identity()
         return tfs
-    
+
+
+    @classmethod
+    def set_repo_id(cls, repo_id: str=None):
+        """change Hugging Face repository name. """
+        cls._repo_id = repo_id
+
     def save2hf(self, fname: str):
+        if self._repo_id is None:
+            raise RuntimeError("call set_repo_id before using any hf/io utils. ")
         fname = fname if fname is not None else "backbone"
         api = HfApi()
         state_dict = self._model.state_dict()
@@ -134,15 +163,19 @@ class BaseFeaturesModel(nn.Module, abc.ABC):
 
     @classmethod
     def list_versions(cls):
+        if cls._repo_id is None:
+            raise RuntimeError("call set_repo_id before using any hf/io utils. ")
         api = HfApi()
         return [f.split("/")[-1].replace(".bin", "") 
-                for f in api.list_repo_files() 
+                for f in api.list_repo_files(repo_id=cls._repo_id) 
                 if f.startswith(f"{cls._name}")]
     
     @classmethod
-    def load(cls, version_fname: str):
-        hf_path = "{}/{}.bin".format(cls._name, version_fname)
+    def load(cls, fname: str):
+        hf_path = "{}/{}.bin".format(cls._name, fname)
         cls = cls()
+        if cls._repo_id is None:
+            raise RuntimeError("call set_repo_id before using any hf/io utils. ")
         if file_exists(repo_id=cls._repo_id, 
                     filename=hf_path):
             statesf = hf_hub_download(repo_id=cls._repo_id,
@@ -155,30 +188,42 @@ class BaseFeaturesModel(nn.Module, abc.ABC):
             warn(f"coudn't find model weigths version at: {cls._repo_id}")
         return cls
 
+    @backbone_pre_forward
+    def forward(self, 
+                raw: Optional[th.Tensor]=None,
+                fs: Optional[float]=None,
+                dense: Optional[th.Tensor]=None,
+                **kwargs):
+        return self.forward_impl(raw=raw, fs=fs, dense=dense, **kwargs)
+
+    @abc.abstractmethod
+    def forward_impl(self, dense: th.Tensor, *args, **kwargs):
+        raise NotImplementedError("features module must have forward module. ")
+
 @register_backbone()
 class featuresFasterNet(BaseFeaturesModel):
     _name: str="fasternet"
     _embedding_dim: int=320
     _acronim: str="fasternet_t0.in1k"
 
-    def __init__(self):
+    def __init__(self, num_classes: Optional[int]=None):
         super(featuresFasterNet, self).__init__()
-        self.init_model()
+        self.init_model(num_classes=num_classes)
 
-    def forward(self, 
-                raw: th.Tensor, 
-                fs: float, 
-                out_indices: Optional[List[int]]=None):
-
-        raw = _check_input(raw)
-        dense = raw_sig2spec(raw=raw, sampling_rate=fs)
+    def forward_impl(self, 
+                    dense: Optional[th.Tensor]=None,
+                    out_indices: Optional[List[int]]=None,
+                    **kwargs):
+        """FasterNet custom forward implmentation. """
         dense = self._tf(dense)
-
         features = self._model.patch_embed(dense)
         intermediates = []
         for idx, layer in enumerate(self._model.stages.children()):
             features = layer(features)
-            if idx in out_indices:
+            if out_indices is not None:
+                if idx in out_indices:
+                    intermediates.append(features)
+            else:
                 intermediates.append(features)
 
         x_cls = features
@@ -200,20 +245,16 @@ class featuresCrossVit(BaseFeaturesModel):
     _acronim: str = "crossvit_9_240.in1k"
     _img_size: Tuple[int]=(240, 240)
 
-    def __init__(self):
+    def __init__(self, num_classes: Optional[int]=None):
         super(featuresCrossVit, self).__init__()
-        self.init_model(img_size=self._img_size)
-        
-    def forward(self,
-                raw: th.Tensor,
-                fs: float,
+        self.init_model(img_size=self._img_size, num_classes=num_classes)
+
+    def forward_impl(self,
+                dense: Optional[th.Tensor]=None,
                 out_branch: int=0,
                 **kwargs):
-        
-        raw = _check_input(raw)
-        dense = raw_sig2spec(raw=raw, sampling_rate=fs)
+        """CrossVit custom forward implementation. """
         dense = self._tf(dense)
-
         features = self._model.forward_features(dense)
         embedding = th.cat([f[:, 0, :] for f in features], dim=-1)
         predictions = self._model.forward_head(features)
@@ -221,3 +262,29 @@ class featuresCrossVit(BaseFeaturesModel):
 
 
 
+if __name__ == "__main__":
+
+    import random as rd
+    letters = list("QWERTYUIOPASDFGHJKLZXCVBNM1234567890!@#$%^&*")
+    model = featuresFasterNet(num_classes=32)
+
+    T = 5
+    fs = 1000
+    n = T*fs
+    t = th.linspace(0, 5, n)
+    wave = th.exp(t)*th.sin(t)
+    noise = th.normal(0, 1, (2, 12, n))
+    waves = wave.view(1, 1, -1)*noise
+
+    output = model(raw=waves, fs=fs)
+    print(output.prediction.shape, output.last_hidden_state.shape)
+    # model.save2hf(fname="".join(rd.sample(letters, 10)))
+    # model1 = featuresFasterNet(num_classes=64)
+    # model1.save2hf(fname="".join(rd.sample(letters, 10)))
+    # model2 = featuresFasterNet(num_classes=128)
+    # model2.save2hf(fname="".join(rd.sample(letters, 10)))
+    # versions = featuresFasterNet.list_versions()
+    # print(versions)
+    # for v in versions:
+    #     model = featuresFasterNet.load(fname=v)
+    #     print(model)

@@ -1,30 +1,44 @@
+from .backbones import (
+    featuresFasterNet,
+    featuresCrossVit,
+    featuresOutput,
+    BaseFeaturesModel
+)
+from .register import get_backbone
+from .criterion import (
+    AccumulativeHammingLoss,
+    AccumulativeSubsetAccuracy,
+    AccumulativeJaccardAccuracy,
+    AccumulativeDocumentPrecision,
+    AccumulativeDocumentRecall,
+    AccumulativeDocumentF1,
+    MultiBCECriterion
+)
+
 import torch as th
 import torch.nn as nn
 import torch.nn.functional as F
-import os
 from torch.utils.data import DataLoader
 from typing import Dict, List, Tuple, Optional, Any, Callable, Literal
 from torch.optim import Optimizer, Adam, SGD
 from torch.optim.lr_scheduler import ExponentialLR
-
-from .register import get_backbone
-from heapq import (heappop, heappush, heapreplace, heapify)
-from dataclasses import dataclass, field
-
 import numpy as np
-from warnings import warn
 import lightning as l
 from torch.utils.data import Dataset
 import wfdb
 from copy import deepcopy
-from data import get_loader, get_ptbxl_with_pruning
-from .criterion import MultiBCECriterion
+from data import (
+    get_loader, 
+    get_labels, 
+    get_ptbxl_with_pruning
+)
+from .backbones import *
 
 class EcgAnnotatedSet(Dataset):
     def __init__(self, meta: List[Dict[str, Any]], get_raw: bool=True):
         self._meta = meta
         self._get_raw = get_raw
-        self._raw_cache: Dict[int, th.Tensor] = {}
+        self._raw_cache: Dict[int, Tuple[th.Tensor, float]] = {}
 
     def _get_sample(self, idx: int):
         """get samples and cache signals. """
@@ -33,10 +47,12 @@ class EcgAnnotatedSet(Dataset):
             meta = wfdb.rdrecord(sample["file_path"])
             fs = meta.fs
             raw = th.from_numpy(meta.p_signal).float().transpose(0, 1)
-            self._raw_cache[idx] = raw
-        sample["raw_signal"] = self._raw_cache[idx]
+            self._raw_cache[idx] = (raw, fs)
+
+        (raw, fs) = self._raw_cache[idx]
+        sample["raw_signals"] = raw
         sample["fs"] = fs
-        sample["label"] = th.asarray(sample["label"]).to(th.long)
+        sample["labels"] = th.asarray(sample["label"]).to(th.long)
         return sample
 
     def __len__(self):
@@ -48,7 +64,7 @@ class EcgAnnotatedSet(Dataset):
         sample = self._get_sample(idx)
         return {key: value 
                 for (key, value) in sample.items() 
-                if key in ["raw_signal", "label", "fs"]}
+                if key in ["raw_signals", "labels", "fs"]}
     
 class BackboneDataModule(l.LightningDataModule):
     def __init__(self, 
@@ -72,9 +88,12 @@ class BackboneDataModule(l.LightningDataModule):
         """load data meta storage and create data splits. """
         loader_cfg = {} if self._loader_cfg is None else self._loader_cfg
         if self._loader_name == "ptbxl":
-            self._meta = list(get_ptbxl_with_pruning(root=self._data_root, **loader_cfg)["loader"])
+            data = get_ptbxl_with_pruning(root=self._data_root, **loader_cfg)
+            self._meta = list(data["loader"])
+            self._labels = data["labels"]
         else:
             self._meta = list(get_loader(self._loader_name, root=self._data_root, **loader_cfg))
+            self._labels = get_labels(self._loader_name)
 
         parts = np.cumsum(
             np.asarray([len(self._meta) * p for p in self._splits_vols])
@@ -85,7 +104,7 @@ class BackboneDataModule(l.LightningDataModule):
 
     def setup(self, stage: str):
         """setup train/validate/test dataset splits. """
-        if stage in ("vlaidate", "fit"):
+        if stage in ("validate", "fit"):
             self._train_dataset = EcgAnnotatedSet(meta=self._splits["train"])
             self._validate_dataset = EcgAnnotatedSet(meta=self._splits["validate"])
         elif stage == "test":
@@ -93,16 +112,12 @@ class BackboneDataModule(l.LightningDataModule):
 
     def train_dataloader(self):
         if hasattr(self, "_train_dataset"):
-            return DataLoader(dataset=self._train_dataset, 
-                            batch_size=self._batch_size, 
-                            shuffle=self._shuffle)
+            return DataLoader(dataset=self._train_dataset, batch_size=self._batch_size)
         else:
             return 
     def val_dataloader(self):
         if hasattr(self, "_validate_dataset"):
-            return DataLoader(dataset=self._validate_dataset, 
-                            batch_size=self._batch_size, 
-                            shuffle=self._shuffle)
+            return DataLoader(dataset=self._validate_dataset, batch_size=self._batch_size)
         else:
             return 
     def test_dataloader(self):
@@ -117,9 +132,10 @@ class BackboneDataModule(l.LightningDataModule):
 class BackboneTrianingContainer(l.LightningModule):
     def __init__(self, 
                 module_name: str,
+                num_classes: int=1,
                 k: int=3, 
                 mode: Literal["min", "max"]="min",
-                monitor: Optional[str]=None,
+                monitor: Optional[str]="hamming_loss",
                 save_per_epoch: int=100,
                 initial_lr: float=0.01,
                 lr_exponential_gamma: float=0.95,
@@ -127,7 +143,7 @@ class BackboneTrianingContainer(l.LightningModule):
         super(BackboneTrianingContainer, self).__init__()
         self._backbone_cls = get_backbone(module_name)
         self._backbone = self._backbone_cls()
-        self._backbone.init_model()
+        self._backbone.init_model(num_classes=num_classes)
         self._loss_states = []
         self._k = k
         self._monitor = monitor
@@ -135,10 +151,17 @@ class BackboneTrianingContainer(l.LightningModule):
         self._per_epoch = save_per_epoch
         self._lr = initial_lr
         self._gamma = lr_exponential_gamma
+        self._num_classes = num_classes
 
+        metrics_list = metrics_list \
+                        if metrics_list is not None \
+                        else MultiBCECriterion.list_metrics()
         criterion_kwargs = {k: True for k in metrics_list}
         self._criterion = MultiBCECriterion(**criterion_kwargs)
-        # self._val_loss_accum = None
+
+    def set_hf_repo_id(self, repo_id: str):
+        """set Hugging Face repository. """
+        self._backbone.set_repo_id(repo_id)
 
     def _save_weights(self, value: float):
         if len(self._loss_states) < self._k:
@@ -155,7 +178,7 @@ class BackboneTrianingContainer(l.LightningModule):
                 self._backbone.save2hf(f"version_{idx}")
 
     def _check_batch(self, batch: Dict[str, Any]):
-            for key in ["raw_signal", "fs", "labels"]:
+            for key in ["raw_signals", "fs", "labels"]:
                 if key not in batch:
                     raise ValueError(f"attrib {key} required in batch")
 
@@ -170,8 +193,8 @@ class BackboneTrianingContainer(l.LightningModule):
         assert mode in ["train", "val", "test"]
         accum = True if mode == "val" else False
         self._check_batch(batch)
-        (raw, fs, labels) = (batch["raw_signal"], batch["fs"], batch["labels"])
-        model_out = self._backbone(raw=raw, fs=fs)
+        (raw, fs, labels) = (batch["raw_signals"], batch["fs"], batch["labels"])
+        model_out = self._backbone(raw=raw, fs=fs[0].cuda())
         loss_pkg = self._criterion(labels, model_out.prediction, accum=accum)
         for (key, value) in loss_pkg.items():
             self.log(f"{mode}_{key}", value, on_epoch=True)
@@ -184,6 +207,10 @@ class BackboneTrianingContainer(l.LightningModule):
         with th.no_grad():
             return self.batch_step(batch, batch_idx, "val")
 
+    def test_step(self, batch: Dict[str, Any], batch_idx: int):
+        with th.no_grad():
+            return self.batch_step(batch, batch_idx, "test")
+        
     def on_validation_epoch_end(self):
         """check wheree to save latest epoch call states. """
         metrics = self._criterion.normalize()
@@ -193,3 +220,81 @@ class BackboneTrianingContainer(l.LightningModule):
         self._criterion.reset()
         if (self.current_epoch % self._per_epoch) == 0:
             self._save_weights(value)
+
+
+def train(
+    hf_repo: str,
+    root: str,
+    loader_name: str,
+    model_name: str,
+    epochs: int=1000,
+    batch_size: int=32,
+    shuffle: bool=True,
+    accelerator: str="cuda",
+    devices: int=1,
+    **kwargs
+):
+    """backbone training function. """
+    dmodule_kwargs = {}
+    for attrib in list(kwargs.keys()):
+        if attrib in ["data_splits", "loader_cfg"]:
+            dmodule_kwargs[attrib] = kwargs.pop(attrib)
+    data_module = BackboneDataModule(
+        root=root,
+        loader=loader_name,
+        batch_size=batch_size,
+        shuffle=shuffle,
+        **dmodule_kwargs
+    )
+    module_kwargs = {}
+    for attrib in list(kwargs.keys()):
+        if attrib in ["top_k", 
+                    "monitor", 
+                    "mode",
+                    "save_per_epochs",
+                    "lr_exponential_gamma",
+                    "metrics",
+                    "num_classes"]:
+            module_kwargs[attrib] = kwargs.pop(attrib)
+    model = BackboneTrianingContainer(module_name=model_name, **module_kwargs)
+    model.set_hf_repo_id(hf_repo)
+    logger_kwargs = {}
+    for attrib in list(kwargs.keys()):
+        if "logger_" in attrib:
+            logger_kwargs[attrib] = kwargs.pop(attrib)
+    logger = None
+    if logger_kwargs:
+        from lightning.pytorch.loggers import TensorBoardLogger
+        logger = TensorBoardLogger(**logger_kwargs)
+        
+    trainer = l.Trainer(
+        logger=logger,
+        max_epochs=epochs,
+        accelerator=accelerator,
+        devices=devices,
+        enable_checkpointing=False,
+    )
+    trainer.fit(model, datamodule=data_module)
+    trainer.test(model, datamodule=data_module)
+    return model, data_module
+
+
+
+__all__ = [
+    "featuresFasterNet",
+    "featuresCrossVit",
+    "featuresOutput",
+    "BaseFeaturesModel",
+    "get_backbone",
+    "AccumulativeHammingLoss",
+    "AccumulativeSubsetAccuracy",
+    "AccumulativeJaccardAccuracy",
+    "AccumulativeDocumentPrecision",
+    "AccumulativeDocumentRecall",
+    "AccumulativeDocumentF1",
+    "MultiBCECriterion",
+    "BackboneTrianingContainer",
+    "BackboneDataModule",
+    "EcgAnnotatedSet",
+    "train"
+]
