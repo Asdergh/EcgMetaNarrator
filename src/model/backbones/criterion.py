@@ -200,6 +200,7 @@ class MultiBCECriterion(nn.Module):
         hamming: bool = False,
         f1: bool = False,
         accuracy_subset: bool = False,
+        **kwargs
     ):
         super().__init__()
         self.bce = nn.BCEWithLogitsLoss()
@@ -215,9 +216,26 @@ class MultiBCECriterion(nn.Module):
         self.doc_recall_module = AccumulativeDocumentRecall()
         self.doc_f1_module = AccumulativeDocumentF1()
 
+    @classmethod
+    def list_metrics(cls):
+        return ["accuracy", 
+                "hamming", 
+                "f1", 
+                "accuracy_subset"]
+
+    @classmethod
+    def list_eval_metrics(cls):
+        return ['hamming_loss', 
+                'subset_accuracy', 
+                'jaccard_accuracy', 
+                'doc_precision', 
+                'doc_recall', 
+                'doc_f1']
+    
     def forward(self, logits: torch.Tensor, targets: torch.Tensor,
                 accum: bool = False) -> Dict[str, torch.Tensor]:
-        out: Dict[str, torch.Tensor] = {"loss": self.bce(logits, targets)}
+        logits = logits.to(targets.dtype)
+        out: Dict[str, torch.Tensor] = {"loss": self.bce(targets, logits)}
         if self.use_hamming:
             out.update(self.hamming_module(logits, targets, accum=accum))
         if self.use_subset:

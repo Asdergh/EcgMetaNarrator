@@ -2,10 +2,10 @@ test_*.txt
 *.txt
 __pycache__
 *.pyc
+logs/
 venv/
-<<<<<<< Updated upstream
 .venv/
-=======
+lightning_logs/
 .pdf
 .csv
->>>>>>> Stashed changes
+

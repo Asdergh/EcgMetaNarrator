@@ -5,7 +5,6 @@ from warnings import warn
 from typing import Any, Callable, Dict, Optional, List
 from dataclasses import (dataclass, fields)
 from .layers import get_activation
-
 __BACKBONES__ = {}
 def _check_backbon(backbone: str):
     for attr in ["_name",
@@ -13,7 +12,7 @@ def _check_backbon(backbone: str):
                 "_repo_id",
                 "_acronim"]:
         if not hasattr(backbone, attr):
-            raise ValueError(f"wrong backbone object. Cound't fidn: {attr} attribute.")
+            raise ValueError(f"wrong backbone object. Cound't find: {attr} attribute.")
         
 def register_backbone(owerride: bool=False):
     """backbone registraction decorator. 
@@ -21,6 +20,7 @@ def register_backbone(owerride: bool=False):
         owerride: where owerride already registered backbone or raise en error. 
         Else arguments provided accoring BackboneMeta structure. """
     def decodator(cls):
+        # print(cls, "HERE <--------------")
         _check_backbon(cls)
         name = cls._name
         if (name not in __BACKBONES__) or owerride:
@@ -32,6 +32,8 @@ def register_backbone(owerride: bool=False):
 
 def get_backbone(name: str):
     backbone = __BACKBONES__.get(name, None)
+    print(name, backbone)
+    print(list(__BACKBONES__.keys()))
     _check_backbon(backbone)
     if name is None:
         warn(f"unknow backbone: {name}")

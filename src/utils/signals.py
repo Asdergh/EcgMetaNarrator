@@ -37,23 +37,23 @@ def raw_sig2spec(sampling_rate: float,
         delta_f and delta_t  sets the resulting height and width
         of spectrogram according to formulas. As lower values to choose as bigger 
         the respective axis becomes. """
+    device = raw.device
     tfs = []
     nfft = int(sampling_rate / delta_f)
     hop_lenght = int(sampling_rate * delta_t)
-    tfs.append(Spectrogram(n_fft=nfft, hop_length=hop_lenght, **kwargs))
+    tfs.append(Spectrogram(n_fft=nfft, hop_length=hop_lenght, **kwargs).to(device))
     if size is not None:
         size = size if isinstance(size, tuple) else (size, )*2
         assert len(size) == 2
-        tfs.append(Resize(size))
+        tfs.append(Resize(size).to(device))
     if standartization:
         func = lambda x: (x / (x.max() + 1e-5))
-        tfs.append(Lambda(func))
+        tfs.append(Lambda(func).to(device))
     if equalize:
         func = lambda x: normalize(x, 0, 1)
         tfs.append(Lambda(func))
         func = lambda x: KE.equalize(x)
-        tfs.append(Lambda(func))
-    if return_callable:
-        return Compose(tfs)
-    else:
-        return Compose(tfs)(raw)
+        tfs.append(Lambda(func).to(device))
+
+    tf = Compose(tfs)
+    return tf if return_callable else tf(raw)
