@@ -4,7 +4,7 @@ from .backbones import (
     featuresOutput,
     BaseFeaturesModel
 )
-from .register import get_backbone
+from .register import get_backbone, BackboneWrapper, MetaFeaturesMixer
 from .criterion import (
     AccumulativeHammingLoss,
     AccumulativeSubsetAccuracy,
@@ -296,5 +296,7 @@ __all__ = [
     "BackboneTrianingContainer",
     "BackboneDataModule",
     "EcgAnnotatedSet",
-    "train"
+    "train",
+    "BackboneWrapper",
+    "MetaFeaturesMixer"
 ]

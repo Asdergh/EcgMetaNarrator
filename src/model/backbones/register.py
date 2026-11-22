@@ -146,7 +146,11 @@ class MetaFeaturesMixer(nn.Module):
             self._backbones = nn.ModuleDict(_backbones)
         else:
             raise ValueError("empty self._backbones. ")
-        
+
+
+    def save2hf(self):
+        pass
+    
     def forward(self, inputs: th.Tensor, return_dict: bool=False, **kwargs):
         tokens = {} if return_dict else []
         for name, m in self._backbones.items():

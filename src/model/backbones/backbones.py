@@ -259,32 +259,3 @@ class featuresCrossVit(BaseFeaturesModel):
         embedding = th.cat([f[:, 0, :] for f in features], dim=-1)
         predictions = self._model.forward_head(features)
         return featuresOutput(prediction=predictions[out_branch], last_hidden_state=embedding)
-
-
-
-if __name__ == "__main__":
-
-    import random as rd
-    letters = list("QWERTYUIOPASDFGHJKLZXCVBNM1234567890!@#$%^&*")
-    model = featuresFasterNet(num_classes=32)
-
-    T = 5
-    fs = 1000
-    n = T*fs
-    t = th.linspace(0, 5, n)
-    wave = th.exp(t)*th.sin(t)
-    noise = th.normal(0, 1, (2, 12, n))
-    waves = wave.view(1, 1, -1)*noise
-
-    output = model(raw=waves, fs=fs)
-    print(output.prediction.shape, output.last_hidden_state.shape)
-    # model.save2hf(fname="".join(rd.sample(letters, 10)))
-    # model1 = featuresFasterNet(num_classes=64)
-    # model1.save2hf(fname="".join(rd.sample(letters, 10)))
-    # model2 = featuresFasterNet(num_classes=128)
-    # model2.save2hf(fname="".join(rd.sample(letters, 10)))
-    # versions = featuresFasterNet.list_versions()
-    # print(versions)
-    # for v in versions:
-    #     model = featuresFasterNet.load(fname=v)
-    #     print(model)
